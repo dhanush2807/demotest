@@ -1,0 +1,100 @@
+name: Selenium Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "30 20 * * *"        # every night at 2:00 AM IST (20:30 UTC)
+  workflow_dispatch:              # "Run workflow" button with options
+    inputs:
+      suite:
+        description: "Suite file"
+        type: choice
+        options: [testng.xml, smoke.xml]
+        default: testng.xml
+
+jobs:
+  # Job 1: fast smoke check on every push / PR
+  smoke:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Run smoke tests
+        run: mvn -B clean test -Dsuite=smoke.xml -Dheadless=true
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-reports
+          path: |
+            target/surefire-reports/
+            target/screenshots/
+          if-no-files-found: ignore
+
+  # Job 2: full regression on Chrome AND Firefox (nightly or manual)
+  regression:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Run regression on ${{ matrix.browser }}
+        run: >
+          mvn -B clean test
+          -Dsuite=${{ github.event.inputs.suite || 'testng.xml' }}
+          -Dbrowser=${{ matrix.browser }}
+          -Dheadless=true
+        env:
+          # Example of reading a secret. Add it in repo Settings > Secrets > Actions.
+          PASSWORD: ${{ secrets.APP_PASSWORD }}
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-${{ matrix.browser }}
+          path: |
+            target/surefire-reports/
+            target/screenshots/
+          if-no-files-found: ignore
+
+  # Job 3: same tests against Selenium Grid running in Docker (manual only)
+  grid:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        ports: ["4444:4444"]
+        options: --shm-size=2g
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Wait for Grid
+        run: |
+          for i in $(seq 1 30); do
+            curl -s http://localhost:4444/status | grep -qE '"ready": ?true' && exit 0
+            sleep 2
+          done
+          echo "Grid did not start" && exit 1
+      - name: Run tests on Grid
+        run: mvn -B clean test -Dsuite=smoke.xml -DgridUrl=http://localhost:4444
