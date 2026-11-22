@@ -1,11 +1,9 @@
-// Declarative pipeline. In Jenkins: New Item > Pipeline > "Pipeline script from SCM" > point to this repo.
-// Needs plugins: Pipeline, Git, JUnit. Configure tools named 'Maven3' and 'JDK17' in Manage Jenkins > Tools.
 pipeline {
     agent any
 
     tools {
-        maven 'Maven3'
-        jdk 'JDK17'
+        maven 'MAVEN-3.9.19'
+        jdk 'JDK-17'
     }
 
     parameters {
@@ -15,8 +13,7 @@ pipeline {
     }
 
     triggers {
-        cron('H 2 * * *')        // nightly around 2 AM (server time)
-        // pollSCM('H/5 * * * *') // or: check Git for changes every 5 minutes
+        cron('H 2 * * *')
     }
 
     options {
@@ -33,19 +30,13 @@ pipeline {
 
         stage('Build') {
             steps {
-                sh 'mvn -B clean test-compile'
+                runCmd('mvn -B clean test-compile')
             }
         }
 
         stage('Test') {
             steps {
-                sh "mvn -B test -Dsuite=${params.SUITE} -Dbrowser=${params.BROWSER} -Dheadless=${params.HEADLESS}"
-
-                // Real projects: keep passwords in Manage Jenkins > Credentials ("Secret text", ID app-password)
-                // and replace the sh line above with:
-                // withCredentials([string(credentialsId: 'app-password', variable: 'PASSWORD')]) {
-                //     sh "mvn -B test -Dsuite=${params.SUITE} -Dbrowser=${params.BROWSER} -Dheadless=${params.HEADLESS}"
-                // }
+                runCmd("mvn -B test -Dsuite=${params.SUITE} -Dbrowser=${params.BROWSER} -Dheadless=${params.HEADLESS}")
             }
         }
     }
@@ -60,7 +51,15 @@ pipeline {
         }
         failure {
             echo 'Tests failed - check screenshots in build artifacts'
-            // mail to: 'team@example.com', subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}", body: "${env.BUILD_URL}"
         }
+    }
+}
+
+// Runs a command with sh on Linux/Mac agents and bat on Windows agents.
+def runCmd(String cmd) {
+    if (isUnix()) {
+        sh cmd
+    } else {
+        bat cmd
     }
 }
